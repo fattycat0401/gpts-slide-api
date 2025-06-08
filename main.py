@@ -104,7 +104,7 @@ def generate_pptx():
         page_text = page.get("text", "")
         if page_type not in template_mapping:
             continue
-        slide = clone_slide(template_mapping[page_type])
+        slide = clone_slide(template_mapping[page_type], output)
         for shape in slide.shapes:
             if shape.has_text_frame:
                 shape.text = page_text
