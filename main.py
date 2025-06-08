@@ -109,7 +109,8 @@ def generate_pptx():
             if shape.has_text_frame:
                 shape.text = page_text
                 break
-        output.slides._sldIdLst[-1].element.set("id", str(uuid.uuid4().int & (1<<32)-1))
+# 不再手動設定 slide ID，避免錯誤
+# output.slides._sldIdLst[-1].element.set("id", str(uuid.uuid4().int & (1<<32)-1))
 
     filename = f"slide_{template_key}_{int(time.time())}.pptx"
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
