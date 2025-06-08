@@ -115,7 +115,9 @@ def generate_pptx():
     filename = f"slide_{template_key}_{int(time.time())}.pptx"
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     output.save(filepath)
-    return jsonify({"download_url": f"/static/{filename}"}), 200
+    full_url = f"https://gpts-slide-api.onrender.com/static/{filename}"
+    return jsonify({"download_url": full_url}), 200
+
 
 @app.route('/static/<path:filename>', methods=['GET'])
 def serve_file(filename):
