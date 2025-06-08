@@ -54,14 +54,15 @@ def start_safe_cleanup_thread(folder="static"):
 
 start_safe_cleanup_thread("static")
 
-def clone_slide(template_slide):
-    prs = template_slide.part.presentation
-    slide_layout = prs.slide_layouts[0]
-    new_slide = prs.slides.add_slide(slide_layout)
+def clone_slide(template_slide, output_presentation):
+    blank_layout = output_presentation.slide_layouts[6]  # 使用空白頁面
+    new_slide = output_presentation.slides.add_slide(blank_layout)
+
     for shape in template_slide.shapes:
-        el = shape.element
-        new_el = el.clone()
-        new_slide.shapes._spTree.insert_element_before(new_el, 'p:extLst')
+        try:
+            new_shape = new_slide.shapes._spTree.insert_element_before(shape.element, 'p:extLst')
+        except Exception as e:
+            print(f"❗️無法複製形狀：{e}")
     return new_slide
 
 @app.route("/generate_pptx", methods=["POST"])
