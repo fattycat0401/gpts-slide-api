@@ -1,127 +1,110 @@
+from datetime import datetime, timedelta
+import os
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+from threading import Thread
+import time
 from pptx import Presentation
 from pptx.util import Inches, Pt
-from flask import Flask, request, send_from_directory, jsonify
-from threading import Thread
-import os
-import json
-import uuid
-import time
+from pptx.enum.shapes import MSO_SHAPE
 
+# === Flask Initialization ===
 app = Flask(__name__)
+CORS(app)
+UPLOAD_FOLDER = 'static'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-### 設定參數 ###
-TOKEN = "fattycat0401"
-STATIC_FOLDER = "static"
-EXPIRATION_TIME = 600  # 10分鐘
-os.makedirs(STATIC_FOLDER, exist_ok=True)
-
-
-### 檔案清理背景程序 ###
-def cleanup_expired_files_safe():
+# === Scheduled File Cleanup ===
+def delete_old_files():
     while True:
         now = time.time()
-        for filename in os.listdir(STATIC_FOLDER):
-            filepath = os.path.join(STATIC_FOLDER, filename)
-            if os.path.isfile(filepath) and now - os.path.getmtime(filepath) > EXPIRATION_TIME:
-                try:
-                    os.remove(filepath)
-                except Exception:
-                    pass
-        time.sleep(60)  # 每分鐘掃描一次
+        for filename in os.listdir(UPLOAD_FOLDER):
+            file_path = os.path.join(UPLOAD_FOLDER, filename)
+            if os.path.isfile(file_path) and now - os.path.getctime(file_path) > 600:
+                os.remove(file_path)
+        time.sleep(600)
 
+Thread(target=delete_old_files, daemon=True).start()
 
-Thread(target=cleanup_expired_files_safe, daemon=True).start()
-
-
-### 工具函式：建立首頁 ###
+# === Utility Functions for Slide Formatting ===
 def add_title_slide(prs, title_text):
-    slide = prs.slides.add_slide(prs.slide_layouts[5])
-    title_box = slide.shapes.add_textbox(Inches(1), Inches(2), Inches(8), Inches(2))
-    tf = title_box.text_frame
-    tf.word_wrap = True
-    p = tf.paragraphs[0]
-    run = p.add_run()
-    run.text = title_text
-    run.font.size = Pt(48)
-    run.font.bold = True
-    return slide
+    slide_layout = prs.slide_layouts[0]
+    slide = prs.slides.add_slide(slide_layout)
+    title = slide.shapes.title
+    title.text = title_text
+    title.text_frame.paragraphs[0].font.size = Pt(40)
+    title.text_frame.paragraphs[0].font.bold = True
 
+def add_content_slide(prs, page, is_ending=False):
+    slide_layout = prs.slide_layouts[5]
+    slide = prs.slides.add_slide(slide_layout)
+    left, top = Inches(0.5), Inches(0.5)
+    width, height = Inches(9), Inches(6.5)
+    text_box = slide.shapes.add_textbox(left, top, width, height)
+    tf = text_box.text_frame
+    tf.clear()
 
-### 工具函式：建立內容或結尾頁 ###
-def add_content_slide(prs, h2, sections):
-    slide = prs.slides.add_slide(prs.slide_layouts[5])
-    top = Inches(0.5)
+    title_run = tf.paragraphs[0].add_run()
+    title_run.text = page.get("h2", "")
+    title_run.font.size = Pt(28)
+    title_run.font.bold = True
 
-    # H2 標題
-    h2_box = slide.shapes.add_textbox(Inches(0.5), top, Inches(9), Inches(1))
-    h2_frame = h2_box.text_frame
-    h2_frame.word_wrap = True
-    h2_run = h2_frame.paragraphs[0].add_run()
-    h2_run.text = h2
-    h2_run.font.size = Pt(36)
-    h2_run.font.bold = True
-    top += Inches(1.0)
+    for section in page.get("sections", []):
+        p = tf.add_paragraph()
+        p.space_before = Pt(10)
+        h3 = section.get("h3", "")
+        text = section.get("p", "")
 
-    for section in sections:
-        if section.get("h3"):
-            h3_box = slide.shapes.add_textbox(Inches(0.7), top, Inches(8), Inches(0.5))
-            h3_frame = h3_box.text_frame
-            h3_frame.word_wrap = True
-            h3_run = h3_frame.paragraphs[0].add_run()
-            h3_run.text = section["h3"]
-            h3_run.font.size = Pt(24)
-            h3_run.font.bold = True
-            top += Inches(0.5)
+        if h3:
+            run_h3 = p.add_run()
+            run_h3.text = f"{h3}\n"
+            run_h3.font.size = Pt(20)
+            run_h3.font.bold = True
 
-        if section.get("p"):
-            p_box = slide.shapes.add_textbox(Inches(1.0), top, Inches(8.5), Inches(1.2))
-            p_frame = p_box.text_frame
-            p_frame.word_wrap = True
-            p_run = p_frame.paragraphs[0].add_run()
-            p_run.text = section["p"]
-            p_run.font.size = Pt(18)
-            top += Inches(1.0)
+        if text:
+            run_p = tf.add_paragraph().add_run()
+            run_p.text = text
+            run_p.font.size = Pt(16)
 
-    return slide
+    if is_ending:
+        for shape in slide.shapes:
+            if not shape.has_text_frame:
+                continue
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    run.font.italic = True
 
-
-### 主頁面測試用 ###
-@app.route("/")
-def home():
-    return "PPT Generator API is running."
-
-
-### 產生簡報主邏輯 ###
-@app.route("/generate_pptx", methods=["POST"])
+# === Route to Generate PowerPoint ===
+@app.route('/generate_pptx', methods=['POST'])
 def generate_pptx():
-    data = request.get_json()
-    token = data.get("token", "")
-    if token != TOKEN:
+    token = request.json.get("token")
+    if token != "fattycat0401":
         return jsonify({"error": "Invalid token"}), 403
 
+    data = request.json
     h1 = data.get("h1", "Untitled Presentation")
     pages = data.get("pages", [])
 
     prs = Presentation()
-
-    # 首頁
     add_title_slide(prs, h1)
 
-    # 內容與結尾頁
-    for page in pages:
-        h2 = page.get("h2", "")
-        sections = page.get("sections", [])
-        add_content_slide(prs, h2, sections)
+    for i, page in enumerate(pages):
+        is_ending = (i == len(pages) - 1)
+        add_content_slide(prs, page, is_ending=is_ending)
 
-    # 儲存檔案
-    filename = f"{uuid.uuid4().hex}.pptx"
-    filepath = os.path.join(STATIC_FOLDER, filename)
-    prs.save(filepath)
+    filename = f"presentation_{datetime.now().strftime('%Y%m%d%H%M%S')}.pptx"
+    save_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    prs.save(save_path)
 
-    return jsonify({"download_url": f"/static/{filename}"})
+    download_url = f"https://gpts-slide-api.onrender.com/static/{filename}"
+    return jsonify({"download_url": download_url})
 
+# === Serve Static Files ===
+@app.route('/static/<path:filename>')
+def serve_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-### 提供下載簡報 ###
-@app.route("/static/<filename>")
-def download_file(filename):
-    return send_from_directory(STATIC_FOLDER, filename, as_attachment=True)
+# === Run App with Render-Compatible Port Binding ===
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
